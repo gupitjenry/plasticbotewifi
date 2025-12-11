@@ -1,5 +1,8 @@
 <?php
 session_start();
+$bottles = isset($_GET['bottles']) ? intval($_GET['bottles']) : 0;
+$tokens = isset($_GET['tokens']) ? explode(',', $_GET['tokens']) : [];
+
 ?>
 <!doctype html>
 <html lang="en">
@@ -600,68 +603,94 @@ body {
             }
 
             function startWiFiTimer(verificationToken, numBottles = 1) {
-                const display = document.getElementById('timeRemaining');
+    const display = document.getElementById('timeRemaining');
 
-                if (!verificationToken) {
-                    console.error('No verification token - cannot grant WiFi access');
-                    showError('Security error: No bottle verification token', 'SECURITY_ERROR', {
-                        'message': 'This should not happen - please try again'
-                    });
+    if (!verificationToken) {
+        console.error('No verification token - cannot grant WiFi access');
+        showError('Security error: No bottle verification token', 'SECURITY_ERROR', {
+            'message': 'This should not happen - please try again'
+        });
+        return;
+    }
+
+    // clear any previous wifi timer
+    if (window._wifiTimerInterval) {
+        clearInterval(window._wifiTimerInterval);
+        window._wifiTimerInterval = null;
+    }
+
+    // call back-end to grant access
+    fetch(`hardware_control.php?action=wifi&subaction=grant&token=${encodeURIComponent(verificationToken)}&bottles=${encodeURIComponent(numBottles)}`, { cache: "no-store" })
+        .then(res => {
+            if (!res.ok) throw new Error('Network response was not ok: ' + res.status);
+            return res.json();
+        })
+        .then(data => {
+            console.log('WiFi granted:', data);
+
+            if (data.error) {
+                console.error('WiFi grant failed:', data.error);
+                if (data.severity === 'SECURITY_VIOLATION') {
+                    document.querySelector('.success-message').style.display = 'none';
+                    showError(data.message || data.error, 'SECURITY_ERROR', { 'details': data.details });
                     return;
                 }
-                
-                fetch(`hardware_control.php?action=wifi&subaction=grant&token=${verificationToken}&bottles=${numBottles}`)
-                    .then(res => res.json())
-                    .then(data => {
-                        console.log('WiFi granted:', data);
-                        if (data.error) {
-                            console.error('WiFi grant failed:', data.error);
-                            if (data.severity === 'SECURITY_VIOLATION') {
-                                successMessage.style.display = 'none';
-                                showError(data.message || data.error, 'SECURITY_ERROR', {
-                                    'details': data.details
-                                });
-                                return;
-                            }
-                        }
-                        
-                        const durationMinutes = (data.duration_minutes || 5) * numBottles;
-                        let timeLeft = durationMinutes * 60;
-                        
-                        successMessage.querySelector('.subtitle').textContent = 
-                            `Thank you for recycling ${numBottles} bottle${numBottles > 1 ? 's' : ''}. Your ${durationMinutes} minutes of WiFi access starts now.`;
-                        
-                        const wifiTimer = setInterval(function () {
-                            timeLeft--;
-                            const m = Math.floor(timeLeft / 60);
-                            const s = timeLeft % 60;
-                            display.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                showError(data.message || data.error, 'PYTHON_ERROR', { 'raw_output': data.system_output || null });
+                return;
+            }
 
-                            if (timeLeft <= 0) {
-                                clearInterval(wifiTimer);
-                                
-                                successMessage.style.display = 'none';
-                                
-                                fetch('hardware_control.php?action=wifi&subaction=revoke')
-                                    .then(res => res.json())
-                                    .then(data => {
-                                        console.log('WiFi revoked:', data);
-                                        
-                                        alert('Your WiFi session has ended. Drop another bottle to continue using the internet.');
-                                        
-                                        window.location.reload();
-                                    })
-                                    .catch(err => {
-                                        console.error('Failed to revoke WiFi:', err);
-                                        alert('Your WiFi session has ended. Drop another bottle to continue using the internet.');
-                                        window.location.reload();
-                                    });
-                            }
-                        }, 1000);
-                    })
-                    .catch(err => console.error('WiFi control error:', err));
+            // data.duration_minutes should be minutes PER BOTTLE (as hardware_control.php returns)
+            const minutesPerBottle = Number(data.duration_minutes || 5);
+            const totalMinutes = minutesPerBottle * Number(numBottles || 1);
+            let secondsLeft = totalMinutes * 60;
+
+            // update subtitle to show total minutes
+            successMessage.querySelector('.subtitle').textContent =
+                `Thank you for recycling ${numBottles} bottle${numBottles > 1 ? 's' : ''}. Your ${totalMinutes} minutes of WiFi access starts now.`;
+
+            // render initial display immediately
+            function renderTime(sec) {
+                const m = Math.floor(sec / 60);
+                const s = sec % 60;
+                display.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+            }
+            renderTime(secondsLeft);
+
+            // store interval globally so we can clear it later
+            window._wifiTimerInterval = setInterval(function () {
+                secondsLeft--;
+                if (secondsLeft < 0) secondsLeft = 0;
+                renderTime(secondsLeft);
+
+                if (secondsLeft <= 0) {
+                    clearInterval(window._wifiTimerInterval);
+                    window._wifiTimerInterval = null;
+                    document.querySelector('.success-message').style.display = 'none';
+
+                    // revoke access on server
+                    fetch('hardware_control.php?action=wifi&subaction=revoke', { cache: "no-store" })
+                        .then(r => r.json().catch(() => ({})))
+                        .then(resp => {
+                            console.log('WiFi revoked:', resp);
+                            alert('Your WiFi session has ended. Drop another bottle to continue using the internet.');
+                            window.location.reload();
+                        })
+                        .catch(err => {
+                            console.error('Failed to revoke WiFi:', err);
+                            alert('Your WiFi session has ended. Drop another bottle to continue using the internet.');
+                            window.location.reload();
+                        });
+                }
+            }, 1000);
+        })
+        .catch(err => {
+            console.error('WiFi control error:', err);
+            showError('Failed to grant WiFi: ' + err.message, 'PYTHON_ERROR', { 'raw_output': err.message });
+        });
             }
         });
+
+    
     </script>
 </body>
 </html>
