@@ -4,10 +4,16 @@ session_start();
 // --------------------------------------
 // AUTH CHECK
 // --------------------------------------
+// Check if already logged in
 if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
     header('Location: admin-login.php');
     exit;
 }
+
+
+
+
+
 
 // --------------------------------------
 // FILE PATHS
